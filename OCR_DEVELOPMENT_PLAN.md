@@ -586,13 +586,13 @@ class BatchProcessor:
 - [x] Set up project structure
 - [x] Install dependencies
 - [x] Create comprehensive data models with all element types
-- [ ] Implement basic OCR engine wrapper
+- [x] Implement basic OCR engine wrapper
 
 ### Sprint 2: Text Detection (Weeks 3-4)
-- [ ] Implement heading detection
-- [ ] Implement paragraph/text extraction
-- [ ] Implement block quote detection
-- [ ] Test on sample images
+- [x] Implement heading detection
+- [x] Implement paragraph/text extraction
+- [x] Implement block quote detection
+- [x] Test on sample images
 
 ### Sprint 3: List & Table Detection (Weeks 5-7)
 - [ ] Implement marker-based list detection
