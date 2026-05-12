@@ -1,19 +1,27 @@
 """
 Detectors Package - Structure detection modules.
 
-This package contains specialized detectors for different element types:
-- text_detector: Headings, paragraphs, block quotes
-- list_detector: Lists and nested structures
-- table_detector: Tables with cells and merged cells (line-based, Hough transform)
-- content_table_detector: Tables without visible grid lines (spatial analysis fallback)
-- (coming) figure_detector: Figures and captions
-- (coming) formula_detector: Formulas and equations
-- And more...
+All detectors follow the Config + Detector + Trace pattern:
+1. Config dataclass    — parameterizes the detector
+2. Detector class      — detect() method returns (List[StructuralElement], Trace)
+3. Trace dataclass     — records timing, counts, and config for reproducibility
 
-All detectors follow the same pattern:
-1. Config class for parameterization
-2. Detector class with detect/extract method
-3. ProcessingTrace for reproducibility
+Sprint 1-2
+----------
+- text_detector         : TEXT, HEADING, BLOCK_QUOTE
+
+Sprint 3
+--------
+- list_detector         : LIST (marker-based, nested hierarchy)
+- table_detector        : TABLE (line-based, Hough transform)
+- content_table_detector: TABLE (content/spatial-based, borderless fallback)
+
+Sprint 4
+--------
+- header_footer_detector: HEADER, FOOTER, PAGE_NUMBER + date annotation
+- formula_detector      : FORMULA, EQUATION (+ optional pix2tex/sympy layers)
+- figure_detector       : FIGURE, CAPTION (contour-based + caption-pattern linking)
+- annotation_detector   : ANNOTATION (highlight/underline/strikethrough)
 """
 
 from .text_detector import TextDetector, TextDetectorConfig, TextDetectionTrace
@@ -24,11 +32,34 @@ from .content_table_detector import (
     ContentTableDetectorConfig,
     ContentTableDetectionTrace,
 )
+from .header_footer_detector import (
+    HeaderFooterDetector,
+    HeaderFooterDetectorConfig,
+    HeaderFooterDetectionTrace,
+    DateInfo,
+)
+from .formula_detector import (
+    FormulaDetector,
+    FormulaDetectorConfig,
+    FormulaDetectionTrace,
+)
+from .figure_detector import (
+    FigureDetector,
+    FigureDetectorConfig,
+    FigureDetectionTrace,
+)
+from .annotation_detector import (
+    AnnotationDetector,
+    AnnotationDetectorConfig,
+    AnnotationDetectionTrace,
+)
 
 __all__ = [
+    # Sprint 2
     "TextDetector",
     "TextDetectorConfig",
     "TextDetectionTrace",
+    # Sprint 3
     "ListDetector",
     "ListDetectorConfig",
     "ListDetectionTrace",
@@ -38,4 +69,19 @@ __all__ = [
     "ContentTableDetector",
     "ContentTableDetectorConfig",
     "ContentTableDetectionTrace",
+    # Sprint 4
+    "HeaderFooterDetector",
+    "HeaderFooterDetectorConfig",
+    "HeaderFooterDetectionTrace",
+    "DateInfo",
+    "FormulaDetector",
+    "FormulaDetectorConfig",
+    "FormulaDetectionTrace",
+    # Sprint 4 (continued)
+    "FigureDetector",
+    "FigureDetectorConfig",
+    "FigureDetectionTrace",
+    "AnnotationDetector",
+    "AnnotationDetectorConfig",
+    "AnnotationDetectionTrace",
 ]
