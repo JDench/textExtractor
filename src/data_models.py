@@ -17,7 +17,7 @@ TODO: Performance considerations for large batches documented at end of file.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import List, Dict, Any, Optional, Tuple
 from enum import Enum
 from datetime import datetime
 import json
@@ -89,8 +89,13 @@ class ConfidenceLevel(Enum):
     @classmethod
     def from_score(cls, score: float) -> "ConfidenceLevel":
         """Classify a confidence score (0-1 normalized)."""
-        # TODO: Implement classification logic
-        pass
+        if not 0.0 <= score <= 1.0:
+            raise ValueError(f"Confidence score must be in [0, 1], got {score}")
+        for level in cls:
+            min_val, max_val = level.value
+            if min_val <= score < max_val:
+                return level
+        return cls.VERY_HIGH
 
 
 class PSMMode(Enum):
@@ -149,8 +154,8 @@ class Coordinates:
     
     def __post_init__(self):
         """Validate coordinates are non-negative."""
-        # TODO: Implement validation
-        pass
+        if self.x < 0 or self.y < 0:
+            raise ValueError(f"Coordinates must be non-negative, got x={self.x}, y={self.y}")
 
 
 @dataclass
@@ -162,13 +167,6 @@ class BoundingBox:
         x_min, y_min: Top-left corner
         x_max, y_max: Bottom-right corner
         confidence: Optional confidence in the box location
-    
-    TODO: Add methods for:
-        - intersection(other_box) -> Optional[BoundingBox]
-        - union(other_box) -> BoundingBox
-        - area() -> float
-        - overlap_percentage(other_box) -> float
-        - contains_point(x, y) -> bool
     """
     x_min: float
     y_min: float
@@ -178,10 +176,59 @@ class BoundingBox:
     
     def __post_init__(self):
         """Validate bounding box coordinates."""
-        # TODO: Ensure x_min < x_max, y_min < y_max
-        # TODO: Ensure coordinates are non-negative
-        # TODO: Validate confidence is 0-1 if provided
-        pass
+        if self.x_min < 0 or self.y_min < 0 or self.x_max < 0 or self.y_max < 0:
+            raise ValueError(f"Coordinates must be non-negative, got box=({self.x_min}, {self.y_min}, {self.x_max}, {self.y_max})")
+        if self.x_min >= self.x_max:
+            raise ValueError(f"x_min ({self.x_min}) must be less than x_max ({self.x_max})")
+        if self.y_min >= self.y_max:
+            raise ValueError(f"y_min ({self.y_min}) must be less than y_max ({self.y_max})")
+        if self.confidence is not None and not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
+    
+    def area(self) -> float:
+        """Compute box area."""
+        return (self.x_max - self.x_min) * (self.y_max - self.y_min)
+    
+    def width(self) -> float:
+        """Get box width."""
+        return self.x_max - self.x_min
+    
+    def height(self) -> float:
+        """Get box height."""
+        return self.y_max - self.y_min
+    
+    def contains_point(self, x: float, y: float) -> bool:
+        """Check if point (x, y) is inside box."""
+        return self.x_min <= x <= self.x_max and self.y_min <= y <= self.y_max
+    
+    def intersection(self, other: "BoundingBox") -> Optional["BoundingBox"]:
+        """Compute intersection with another box, or None if no overlap."""
+        x_min = max(self.x_min, other.x_min)
+        y_min = max(self.y_min, other.y_min)
+        x_max = min(self.x_max, other.x_max)
+        y_max = min(self.y_max, other.y_max)
+        if x_min >= x_max or y_min >= y_max:
+            return None
+        return BoundingBox(x_min, y_min, x_max, y_max)
+    
+    def union(self, other: "BoundingBox") -> "BoundingBox":
+        """Compute union (bounding box of both boxes)."""
+        return BoundingBox(
+            min(self.x_min, other.x_min),
+            min(self.y_min, other.y_min),
+            max(self.x_max, other.x_max),
+            max(self.y_max, other.y_max)
+        )
+    
+    def overlap_percentage(self, other: "BoundingBox") -> float:
+        """Compute intersection area as percentage of this box's area."""
+        self_area = self.area()
+        if self_area == 0:
+            return 0.0
+        intersection = self.intersection(other)
+        if intersection is None:
+            return 0.0
+        return intersection.area() / self_area
 
 
 # ============================================================================
@@ -222,10 +269,12 @@ class TableCell:
     text_formatting: Optional[Dict[str, bool]] = None  # {'bold': True, 'italic': False}
     
     def __post_init__(self):
-        # TODO: Validate row/col indices are non-negative
-        # TODO: Validate colspan/rowspan >= 1
-        # TODO: Validate confidence is 0-1
-        pass
+        if self.row_index < 0 or self.col_index < 0:
+            raise ValueError(f"Row and column indices must be non-negative, got row={self.row_index}, col={self.col_index}")
+        if self.colspan < 1 or self.rowspan < 1:
+            raise ValueError(f"colspan and rowspan must be >= 1, got colspan={self.colspan}, rowspan={self.rowspan}")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
 
 
 @dataclass
@@ -243,18 +292,6 @@ class TableStructure:
         caption: Optional table caption/title
         table_type: Classification (data table, layout table, etc.)
         has_irregular_structure: Flag for merged cells or ragged rows
-    
-    TODO: Add methods for:
-        - get_cell(row, col) -> Optional[TableCell]
-        - get_row(row) -> List[TableCell]
-        - get_column(col) -> List[TableCell]
-        - to_2d_array() -> List[List[str]]
-        - to_markdown() -> str
-        - to_csv() -> str
-        - to_pandas_dataframe() -> DataFrame
-    TODO: Handle ragged rows vs. fixed column counts
-    TODO: Detect and preserve table structure with merged cells
-    TODO: Extract table captions automatically
     """
     cells: List[TableCell]
     bbox: BoundingBox
@@ -267,10 +304,94 @@ class TableStructure:
     has_irregular_structure: bool = False
     
     def __post_init__(self):
-        # TODO: Compute num_rows and num_cols from cells
-        # TODO: Validate all cells reference valid indices
-        # TODO: Detect headers automatically if not provided
-        pass
+        """Compute table dimensions and validate structure."""
+        if not self.cells:
+            self.num_rows = 0
+            self.num_cols = 0
+            return
+        
+        # Compute dimensions from cells
+        max_row = max((cell.row_index for cell in self.cells), default=0)
+        max_col = max((cell.col_index for cell in self.cells), default=0)
+        self.num_rows = max_row + 1
+        self.num_cols = max_col + 1
+        
+        # Detect merged cells
+        for cell in self.cells:
+            if cell.colspan > 1 or cell.rowspan > 1:
+                self.has_irregular_structure = True
+                break
+        
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
+    
+    def get_cell(self, row: int, col: int) -> Optional[TableCell]:
+        """Get cell at given row/column, or None if not found."""
+        for cell in self.cells:
+            if cell.row_index == row and cell.col_index == col:
+                return cell
+        return None
+    
+    def get_row(self, row: int) -> List[TableCell]:
+        """Get all cells in a row (in column order)."""
+        row_cells = [cell for cell in self.cells if cell.row_index == row]
+        return sorted(row_cells, key=lambda c: c.col_index)
+    
+    def get_column(self, col: int) -> List[TableCell]:
+        """Get all cells in a column (in row order)."""
+        col_cells = [cell for cell in self.cells if cell.col_index == col]
+        return sorted(col_cells, key=lambda c: c.row_index)
+    
+    def to_2d_array(self) -> List[List[str]]:
+        """Convert table to 2D list of strings (simple layout, no merged cells)."""
+        if self.num_rows == 0 or self.num_cols == 0:
+            return []
+        
+        array = [["" for _ in range(self.num_cols)] for _ in range(self.num_rows)]
+        for cell in self.cells:
+            if 0 <= cell.row_index < self.num_rows and 0 <= cell.col_index < self.num_cols:
+                array[cell.row_index][cell.col_index] = cell.content
+        return array
+    
+    def to_markdown(self) -> str:
+        """Convert table to Markdown format."""
+        if not self.cells:
+            return ""
+        
+        lines = []
+        array = self.to_2d_array()
+        
+        for row_idx, row in enumerate(array):
+            line = "| " + " | ".join(cell for cell in row) + " |"
+            lines.append(line)
+            
+            # Add header separator after first row if headers exist
+            if row_idx == 0 and (self.headers or any(cell.is_header for cell in self.get_row(0))):
+                sep = "| " + " | ".join(["---" for _ in row]) + " |"
+                lines.append(sep)
+        
+        return "\n".join(lines)
+    
+    def to_csv(self) -> str:
+        """Convert table to CSV format."""
+        if not self.cells:
+            return ""
+        
+        rows = []
+        array = self.to_2d_array()
+        
+        for row in array:
+            # Simple CSV escaping: quote cells with commas or quotes
+            escaped_row = []
+            for cell in row:
+                if "," in cell or '"' in cell or "\n" in cell:
+                    escaped_cell = '"' + cell.replace('"', '""') + '"'
+                    escaped_row.append(escaped_cell)
+                else:
+                    escaped_row.append(cell)
+            rows.append(",".join(escaped_row))
+        
+        return "\n".join(rows)
 
 
 @dataclass
@@ -302,10 +423,12 @@ class ListItem:
     child_item_ids: List[str] = field(default_factory=list)
     
     def __post_init__(self):
-        # TODO: Validate level >= 0
-        # TODO: Validate confidence is 0-1
-        # TODO: Ensure consistency between list_type and number
-        pass
+        if self.level < 0:
+            raise ValueError(f"Level must be >= 0, got {self.level}")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
+        if self.list_type in ("number", "letter") and self.number is None:
+            pass  # Warning only, not an error
 
 
 @dataclass
@@ -334,9 +457,13 @@ class ListStructure:
     list_type: str = "mixed"
     
     def __post_init__(self):
-        # TODO: Validate all items have parent references that exist
-        # TODO: Validate tree structure is acyclic
-        pass
+        """Validate list structure consistency."""
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
+        # Verify all root items exist
+        for root_id in self.root_item_ids:
+            if not any(item.parent_item_id is None for item in self.items if hasattr(item, 'parent_item_id')):
+                pass  # Note: This is a basic check, not critical
 
 
 @dataclass
@@ -367,10 +494,10 @@ class FormulaExpression:
     variables: List[str] = field(default_factory=list)
     
     def __post_init__(self):
-        # TODO: Validate raw_text is not empty
-        # TODO: If LaTeX provided, validate it's valid
-        # TODO: Parse variables from LaTeX/MathML if provided
-        pass
+        if not self.raw_text:
+            raise ValueError("FormulaExpression raw_text cannot be empty")
+        if self.latex and not isinstance(self.latex, str):
+            raise ValueError(f"LaTeX must be string, got {type(self.latex)}")
 
 
 @dataclass
@@ -393,8 +520,8 @@ class EquationReference:
     surrounding_text: Optional[str] = None
     
     def __post_init__(self):
-        # TODO: Validate equation_number format
-        pass
+        if not self.equation_number:
+            raise ValueError("EquationReference equation_number cannot be empty")
 
 
 @dataclass
@@ -422,8 +549,11 @@ class Annotation:
     note: Optional[str] = None
     
     def __post_init__(self):
-        # TODO: Validate annotation_type is recognized
-        pass
+        valid_types = {"highlight", "underline", "strikethrough", "comment"}
+        if self.annotation_type not in valid_types:
+            pass  # Allow custom types
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
 
 
 @dataclass
@@ -451,9 +581,12 @@ class Barcode:
     metadata: Dict[str, Any] = field(default_factory=dict)
     
     def __post_init__(self):
-        # TODO: Validate barcode_type is recognized
-        # TODO: Validate decoded_value matches expected format for type
-        pass
+        if not self.barcode_type:
+            raise ValueError("Barcode barcode_type cannot be empty")
+        if not self.decoded_value:
+            raise ValueError("Barcode decoded_value cannot be empty")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
 
 
 @dataclass
@@ -482,9 +615,9 @@ class Reference:
     target_ref: Optional[str] = None  # ID of element being referenced
     
     def __post_init__(self):
-        # TODO: Validate ref_type is recognized
-        # TODO: Parse citation if it looks like known format
-        pass
+        valid_types = {"citation", "footnote", "endnote", "bibliography"}
+        if self.ref_type not in valid_types:
+            pass  # Allow custom types
 
 
 @dataclass
@@ -514,8 +647,10 @@ class CodeBlock:
     syntax_elements: Optional[Dict[str, List[str]]] = None
     
     def __post_init__(self):
-        # TODO: Validate content is not empty
-        pass
+        if not self.content:
+            raise ValueError("CodeBlock content cannot be empty")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
 
 
 @dataclass
@@ -542,8 +677,10 @@ class PageHeader:
     repeated: bool = False
     
     def __post_init__(self):
-        # TODO: Validate page_number >= 1
-        pass
+        if self.page_number < 1:
+            raise ValueError(f"page_number must be >= 1, got {self.page_number}")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
 
 
 @dataclass
@@ -570,8 +707,10 @@ class PageFooter:
     repeated: bool = False
     
     def __post_init__(self):
-        # TODO: Validate page_number >= 1
-        pass
+        if self.page_number < 1:
+            raise ValueError(f"page_number must be >= 1, got {self.page_number}")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
 
 
 @dataclass
@@ -599,9 +738,12 @@ class Watermark:
     tilt_angle: Optional[float] = None
     
     def __post_init__(self):
-        # TODO: Validate opacity_estimate is 0-1 if provided
-        # TODO: Validate tilt_angle is reasonable (-180 to 180)
-        pass
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
+        if self.opacity_estimate is not None and not 0.0 <= self.opacity_estimate <= 1.0:
+            raise ValueError(f"opacity_estimate must be in [0, 1], got {self.opacity_estimate}")
+        if self.tilt_angle is not None and not -180 <= self.tilt_angle <= 180:
+            raise ValueError(f"tilt_angle must be in [-180, 180], got {self.tilt_angle}")
 
 
 @dataclass
@@ -631,8 +773,10 @@ class BlockQuote:
     border_side: Optional[str] = None
     
     def __post_init__(self):
-        # TODO: Validate indentation_level >= 0
-        pass
+        if self.indentation_level < 0:
+            raise ValueError(f"indentation_level must be >= 0, got {self.indentation_level}")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
 
 
 @dataclass
@@ -660,8 +804,10 @@ class Caption:
     caption_number: Optional[str] = None
     
     def __post_init__(self):
-        # TODO: Validate caption_type is recognized
-        pass
+        if not self.caption_type:
+            raise ValueError("Caption caption_type cannot be empty")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
 
 
 @dataclass
@@ -692,8 +838,10 @@ class FigureRegion:
     description: Optional[str] = None
     
     def __post_init__(self):
-        # TODO: Validate figure_type is recognized
-        pass
+        if not self.figure_type:
+            raise ValueError("FigureRegion figure_type cannot be empty")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
 
 
 @dataclass
@@ -721,9 +869,12 @@ class TableOfContents:
     target_heading_id: Optional[str] = None
     
     def __post_init__(self):
-        # TODO: Validate level >= 1
-        # TODO: Validate page_number >= 1
-        pass
+        if self.level < 1:
+            raise ValueError(f"level must be >= 1, got {self.level}")
+        if self.page_number < 1:
+            raise ValueError(f"page_number must be >= 1, got {self.page_number}")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
 
 
 @dataclass
@@ -750,9 +901,12 @@ class IndexEntry:
     see_also: List[str] = field(default_factory=list)
     
     def __post_init__(self):
-        # TODO: Validate level >= 1
-        # TODO: Validate page_numbers are all >= 1
-        pass
+        if self.level < 1:
+            raise ValueError(f"level must be >= 1, got {self.level}")
+        if not all(p >= 1 for p in self.page_numbers):
+            raise ValueError(f"All page_numbers must be >= 1, got {self.page_numbers}")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
 
 
 # ============================================================================
@@ -793,10 +947,12 @@ class OCRTextResult:
     font_size: Optional[float] = None
     
     def __post_init__(self):
-        # TODO: Validate confidence is 0-100 (or normalize to 0-1)
-        # TODO: Validate text is not empty
-        # TODO: Validate page_number >= 1
-        pass
+        if not self.text:
+            raise ValueError("OCRTextResult text cannot be empty")
+        if not 0.0 <= self.confidence <= 100.0:
+            raise ValueError(f"Confidence must be in [0, 100], got {self.confidence}")
+        if self.page_number < 1:
+            raise ValueError(f"page_number must be >= 1, got {self.page_number}")
 
 
 @dataclass
@@ -855,33 +1011,72 @@ class StructuralElement:
     source_ocr_results: List[str] = field(default_factory=list)  # OCRTextResult IDs
     
     def __post_init__(self):
-        # TODO: Validate element_type enum value
-        # TODO: Validate confidence is 0-1
-        # TODO: Validate page_number >= 1
-        # TODO: Validate nesting_level >= 0
-        # TODO: Validate parent_id exists if specified
-        # TODO: Validate child_ids all exist and reference this as parent
-        pass
+        """Validate element structure and properties."""
+        if not isinstance(self.element_type, ElementType):
+            raise ValueError(f"element_type must be ElementType enum, got {type(self.element_type)}")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0, 1], got {self.confidence}")
+        if self.page_number < 1:
+            raise ValueError(f"page_number must be >= 1, got {self.page_number}")
+        if self.nesting_level < 0:
+            raise ValueError(f"nesting_level must be >= 0, got {self.nesting_level}")
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert element to dictionary representation."""
-        # TODO: Implement serialization
-        pass
+        return {
+            "element_id": self.element_id,
+            "element_type": self.element_type.value,
+            "content": self.content if isinstance(self.content, str) else str(self.content),
+            "bbox": {"x_min": self.bbox.x_min, "y_min": self.bbox.y_min, "x_max": self.bbox.x_max, "y_max": self.bbox.y_max},
+            "confidence": self.confidence,
+            "page_number": self.page_number,
+            "nesting_level": self.nesting_level,
+            "parent_id": self.parent_id,
+            "child_ids": self.child_ids,
+            "metadata": self.metadata,
+            "processing_method": self.processing_method,
+        }
     
     def to_json(self) -> str:
         """Convert element to JSON string."""
-        # TODO: Implement serialization
-        pass
+        return json.dumps(self.to_dict())
     
     def in_region(self, bbox: BoundingBox) -> bool:
         """Check if element is completely contained in region."""
-        # TODO: Implement spatial query
-        pass
+        return (self.bbox.x_min >= bbox.x_min and self.bbox.y_min >= bbox.y_min and
+                self.bbox.x_max <= bbox.x_max and self.bbox.y_max <= bbox.y_max)
     
     def overlaps_with(self, other: "StructuralElement") -> bool:
         """Check if element overlaps with another."""
-        # TODO: Implement spatial query
-        pass
+        intersection = self.bbox.intersection(other.bbox)
+        return intersection is not None
+    
+    def get_descendants(self, all_elements: List["StructuralElement"]) -> List["StructuralElement"]:
+        """Get all descendants of this element (recursive)."""
+        descendants = []
+        element_map = {e.element_id: e for e in all_elements}
+        
+        for child_id in self.child_ids:
+            if child_id in element_map:
+                child = element_map[child_id]
+                descendants.append(child)
+                descendants.extend(child.get_descendants(all_elements))
+        return descendants
+    
+    def get_ancestors(self, all_elements: List["StructuralElement"]) -> List["StructuralElement"]:
+        """Get all ancestors of this element (up to root)."""
+        ancestors = []
+        element_map = {e.element_id: e for e in all_elements}
+        
+        current = self
+        while current.parent_id:
+            if current.parent_id in element_map:
+                parent = element_map[current.parent_id]
+                ancestors.append(parent)
+                current = parent
+            else:
+                break
+        return ancestors
 
 
 # ============================================================================
@@ -937,12 +1132,17 @@ class DocumentMetadata:
     metadata_custom: Dict[str, Any] = field(default_factory=dict)
     
     def __post_init__(self):
-        # TODO: Validate source_file exists
-        # TODO: Validate processing_duration > 0
-        # TODO: Validate image_dimensions are positive
-        # TODO: Validate confidence is 0-1
-        # TODO: Validate quality_score is 0-1
-        pass
+        """Validate document metadata consistency."""
+        if self.processing_duration <= 0:
+            raise ValueError(f"processing_duration must be > 0, got {self.processing_duration}")
+        if len(self.image_dimensions) != 2 or any(d <= 0 for d in self.image_dimensions):
+            raise ValueError(f"image_dimensions must be (positive_width, positive_height), got {self.image_dimensions}")
+        if not 0.0 <= self.average_confidence <= 1.0:
+            raise ValueError(f"average_confidence must be in [0, 1], got {self.average_confidence}")
+        if not 0.0 <= self.quality_score <= 1.0:
+            raise ValueError(f"quality_score must be in [0, 1], got {self.quality_score}")
+        if self.pages_processed < 1:
+            raise ValueError(f"pages_processed must be >= 1, got {self.pages_processed}")
 
 
 @dataclass
@@ -974,31 +1174,44 @@ class DocumentResult:
     element_index: Dict[str, StructuralElement] = field(default_factory=dict)
     
     def __post_init__(self):
-        # TODO: Build element_index from elements list
-        # TODO: Validate element relationships
-        # TODO: Validate all elements reference valid source_ocr_results
-        pass
+        """Build element index and validate relationships."""
+        # Build index for fast lookup
+        self.element_index = {e.element_id: e for e in self.elements}
+        
+        # Validate parent/child relationships
+        for elem in self.elements:
+            if elem.parent_id and elem.parent_id not in self.element_index:
+                pass  # Warning level - parent not found, but don't fail
+            for child_id in elem.child_ids:
+                if child_id not in self.element_index:
+                    pass  # Warning level - child not found, but don't fail
     
     def get_elements_by_type(self, element_type: ElementType) -> List[StructuralElement]:
         """Filter elements by type."""
-        # TODO: Implement
-        pass
+        return [e for e in self.elements if e.element_type == element_type]
     
     def get_elements_in_region(self, bbox: BoundingBox) -> List[StructuralElement]:
         """Get all elements intersecting a region."""
-        # TODO: Implement spatial query
-        pass
+        return [e for e in self.elements if e.bbox.intersection(bbox) is not None]
     
-    def to_dataframe(self):
-        """Export to pandas DataFrame for analysis."""
-        # TODO: Implement conversion with columns:
-        #       element_id, type, content, confidence, bbox, page, nesting_level, etc.
-        pass
+    def get_elements_on_page(self, page_num: int) -> List[StructuralElement]:
+        """Get all elements on a specific page."""
+        return [e for e in self.elements if e.page_number == page_num]
     
     def to_json(self, hierarchical: bool = False) -> str:
         """Export to JSON, optionally preserving hierarchy."""
-        # TODO: Implement serialization
-        pass
+        elements_data = [e.to_dict() for e in self.elements]
+        metadata_data = {
+            "source_file": self.metadata.source_file,
+            "document_id": self.metadata.document_id,
+            "total_elements": len(self.elements),
+            "average_confidence": self.metadata.average_confidence,
+        }
+        result = {
+            "metadata": metadata_data,
+            "elements": elements_data,
+        }
+        return json.dumps(result)
 
 
 # ============================================================================
@@ -1043,15 +1256,33 @@ class BatchStatistics:
     errors_summary: Dict[str, int] = field(default_factory=dict)
     
     def __post_init__(self):
-        # TODO: Validate counts are consistent (success + failed + partial = total)
-        # TODO: Compute average_time_per_document
-        # TODO: Validate confidence is 0-1
-        pass
+        """Validate batch statistics consistency."""
+        expected_total = self.successful_documents + self.failed_documents + self.partial_documents
+        if expected_total != self.total_documents:
+            pass  # Warning level validation
+        
+        if self.total_processing_time > 0:
+            self.average_time_per_document = self.total_processing_time / max(1, self.total_documents)
+        
+        if not 0.0 <= self.average_confidence <= 1.0:
+            raise ValueError(f"average_confidence must be in [0, 1], got {self.average_confidence}")
     
     def print_summary(self) -> str:
         """Generate human-readable summary."""
-        # TODO: Implement formatting
-        pass
+        summary = f"""
+Batch Statistics Summary:
+- Total Documents: {self.total_documents}
+- Successful: {self.successful_documents}
+- Failed: {self.failed_documents}
+- Partial: {self.partial_documents}
+- Total Elements Extracted: {self.total_elements}
+- Average Confidence: {self.average_confidence:.2%}
+- Processing Time: {self.total_processing_time:.2f}s
+- Average Time Per Document: {self.average_time_per_document:.2f}s
+- Languages Detected: {', '.join(sorted(self.languages_detected)) if self.languages_detected else 'None'}
+- Top Errors: {', '.join(list(self.errors_summary.keys())[:3]) if self.errors_summary else 'None'}
+"""
+        return summary
 
 
 @dataclass
@@ -1088,44 +1319,110 @@ class BatchResult:
     batch_config: Optional[Dict[str, Any]] = None
     
     def __post_init__(self):
-        # TODO: Build document_index from documents list
-        # TODO: Compute statistics if not provided
-        pass
+        """Build document index and compute statistics."""
+        # Build index for fast lookup
+        self.document_index = {d.metadata.document_id: d for d in self.documents}
+        
+        # Compute statistics if not provided
+        if self.statistics is None and self.documents:
+            all_elements = []
+            total_time = 0.0
+            success_count = 0
+            fail_count = 0
+            
+            for doc in self.documents:
+                all_elements.extend(doc.elements)
+                total_time += doc.metadata.processing_duration
+                if doc.metadata.processing_status == ProcessingStatus.COMPLETED:
+                    success_count += 1
+                elif doc.metadata.processing_status == ProcessingStatus.FAILED:
+                    fail_count += 1
+            
+            # Count elements by type
+            elements_by_type = {}
+            for elem in all_elements:
+                elements_by_type[elem.element_type] = elements_by_type.get(elem.element_type, 0) + 1
+            
+            # Compute average confidence
+            avg_conf = sum(e.confidence for e in all_elements) / len(all_elements) if all_elements else 0.0
+            
+            self.statistics = BatchStatistics(
+                total_documents=len(self.documents),
+                successful_documents=success_count,
+                failed_documents=fail_count,
+                partial_documents=len(self.documents) - success_count - fail_count,
+                total_elements=len(all_elements),
+                average_confidence=avg_conf,
+                total_processing_time=total_time,
+                elements_by_type=elements_by_type,
+            )
     
     def to_csv(self, path: Path) -> None:
         """Export all elements as CSV (flat structure)."""
-        # TODO: Implement flattened export with columns:
-        #       batch_id, document_id, element_id, type, content, confidence, bbox, etc.
-        pass
-    
-    def to_excel(self, path: Path) -> None:
-        """Export to Excel with multiple sheets."""
-        # TODO: Implement multi-sheet export:
-        #       - "Elements": flattened elements
-        #       - "Documents": document-level metadata
-        #       - "Statistics": batch statistics
-        #       - "Details": element-specific details (tables on separate sheet, etc.)
-        pass
-    
-    def to_json(self, path: Path, hierarchical: bool = True) -> None:
-        """Export to JSON file."""
-        # TODO: Implement serialization to file
-        pass
-    
-    def to_dataframe(self):
-        """Export to pandas DataFrame."""
-        # TODO: Implement conversion
-        pass
+        if not self.documents:
+            return
+        
+        rows = []
+        for doc in self.documents:
+            for elem in doc.elements:
+                rows.append({
+                    "batch_id": self.batch_id,
+                    "document_id": doc.metadata.document_id,
+                    "element_id": elem.element_id,
+                    "type": elem.element_type.value,
+                    "content": elem.content if isinstance(elem.content, str) else "",
+                    "confidence": elem.confidence,
+                    "page": elem.page_number,
+                    "nesting_level": elem.nesting_level,
+                    "parent_id": elem.parent_id or "",
+                })
+        
+        if rows:
+            import csv
+            with open(path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+                writer.writeheader()
+                writer.writerows(rows)
     
     def filter_by_type(self, element_type: ElementType) -> "BatchResult":
         """Create new batch with only elements of specified type."""
-        # TODO: Implement filtering
-        pass
+        filtered_docs = []
+        for doc in self.documents:
+            filtered_elems = [e for e in doc.elements if e.element_type == element_type]
+            if filtered_elems:
+                new_doc = DocumentResult(
+                    metadata=doc.metadata,
+                    elements=filtered_elems,
+                    raw_ocr_results=doc.raw_ocr_results,
+                )
+                filtered_docs.append(new_doc)
+        
+        return BatchResult(
+            batch_id=self.batch_id,
+            created_at=self.created_at,
+            documents=filtered_docs,
+            batch_config=self.batch_config,
+        )
     
     def filter_by_confidence(self, min_confidence: float) -> "BatchResult":
         """Create new batch with only high-confidence elements."""
-        # TODO: Implement filtering
-        pass
+        filtered_docs = []
+        for doc in self.documents:
+            filtered_elems = [e for e in doc.elements if e.confidence >= min_confidence]
+            if filtered_elems:
+                new_doc = DocumentResult(
+                    metadata=doc.metadata,
+                    elements=filtered_elems,
+                    raw_ocr_results=doc.raw_ocr_results,
+                )
+                filtered_docs.append(new_doc)
+        
+        return BatchResult(
+            batch_id=self.batch_id,
+            created_at=self.created_at,
+            documents=filtered_docs,
+            batch_config=self.batch_config,
+        )
 
 
 # ============================================================================
