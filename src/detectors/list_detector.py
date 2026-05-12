@@ -420,7 +420,7 @@ class ListDetector:
                 content=item_content,
                 level=level,
                 bbox=ocr_result.bbox,
-                confidence=ocr_result.confidence / 100.0,  # Normalize Tesseract 0-100 to 0-1
+                confidence=ocr_result.confidence,
                 list_type=marker_type.value,
                 number=item_number,
                 parent_item_id=None,  # Will be filled in hierarchy building

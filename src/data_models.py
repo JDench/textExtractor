@@ -343,54 +343,76 @@ class TableStructure:
         return sorted(col_cells, key=lambda c: c.row_index)
     
     def to_2d_array(self) -> List[List[str]]:
-        """Convert table to 2D list of strings (simple layout, no merged cells)."""
+        """
+        Convert table to a 2D list of strings.
+
+        Handles merged cells (colspan/rowspan) by repeating the cell content
+        across every logical slot it spans. Handles ragged rows by padding
+        short rows to num_cols with empty strings.
+        """
         if self.num_rows == 0 or self.num_cols == 0:
             return []
-        
-        array = [["" for _ in range(self.num_cols)] for _ in range(self.num_rows)]
+
+        array: List[List[str]] = [["" for _ in range(self.num_cols)] for _ in range(self.num_rows)]
+
         for cell in self.cells:
-            if 0 <= cell.row_index < self.num_rows and 0 <= cell.col_index < self.num_cols:
-                array[cell.row_index][cell.col_index] = cell.content
-        return array
-    
-    def to_markdown(self) -> str:
-        """Convert table to Markdown format."""
-        if not self.cells:
-            return ""
-        
-        lines = []
-        array = self.to_2d_array()
-        
-        for row_idx, row in enumerate(array):
-            line = "| " + " | ".join(cell for cell in row) + " |"
-            lines.append(line)
-            
-            # Add header separator after first row if headers exist
-            if row_idx == 0 and (self.headers or any(cell.is_header for cell in self.get_row(0))):
-                sep = "| " + " | ".join(["---" for _ in row]) + " |"
-                lines.append(sep)
-        
-        return "\n".join(lines)
-    
-    def to_csv(self) -> str:
-        """Convert table to CSV format."""
-        if not self.cells:
-            return ""
-        
-        rows = []
-        array = self.to_2d_array()
-        
+            r, c = cell.row_index, cell.col_index
+            for dr in range(cell.rowspan):
+                for dc in range(cell.colspan):
+                    tr, tc = r + dr, c + dc
+                    if 0 <= tr < self.num_rows and 0 <= tc < self.num_cols:
+                        array[tr][tc] = cell.content
+
+        # Pad ragged rows so every row has exactly num_cols entries
         for row in array:
-            # Simple CSV escaping: quote cells with commas or quotes
+            while len(row) < self.num_cols:
+                row.append("")
+
+        return array
+
+    def to_markdown(self) -> str:
+        """
+        Convert table to GitHub-Flavored Markdown.
+
+        Merged cells are represented by repeating content in spanned columns
+        (GFM doesn't support true colspan/rowspan). Header separator is
+        inserted after the first row when the table has headers.
+        """
+        if not self.cells:
+            return ""
+
+        array = self.to_2d_array()
+        has_header = bool(self.headers) or any(cell.is_header for cell in self.get_row(0))
+
+        lines = []
+        for row_idx, row in enumerate(array):
+            lines.append("| " + " | ".join(cell for cell in row) + " |")
+            if row_idx == 0 and has_header:
+                lines.append("| " + " | ".join("---" for _ in row) + " |")
+
+        return "\n".join(lines)
+
+    def to_csv(self) -> str:
+        """
+        Convert table to CSV format.
+
+        Merged cells are expanded so that every logical slot gets its own
+        column entry (the content is repeated across spanned columns/rows),
+        keeping the output rectangular and importable without loss.
+        """
+        if not self.cells:
+            return ""
+
+        rows = []
+        for row in self.to_2d_array():
             escaped_row = []
             for cell in row:
                 if "," in cell or '"' in cell or "\n" in cell:
-                    escaped_cell = '"' + cell.replace('"', '""') + '"'
-                    escaped_row.append(escaped_cell)
+                    escaped_row.append('"' + cell.replace('"', '""') + '"')
                 else:
                     escaped_row.append(cell)
             rows.append(",".join(escaped_row))
-        
+
         return "\n".join(rows)
 
 

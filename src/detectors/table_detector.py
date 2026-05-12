@@ -17,6 +17,7 @@ Follows parameterized strategy pattern (ARCHITECTURAL_DECISIONS.md #3)
 Implements processing traces for reproducibility (#5)
 """
 
+import cv2
 import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Any
@@ -290,13 +291,6 @@ class TableDetector:
         Returns:
             (horizontal_lines, vertical_lines) as lists of (x1, y1, x2, y2)
         """
-        try:
-            import cv2
-        except ImportError:
-            # Fallback: return empty lines if cv2 not available
-            logger.warning("OpenCV not available, returning empty lines")
-            return [], []
-        
         # Detect lines using HoughLinesP
         lines = cv2.HoughLinesP(
             edges,
@@ -483,12 +477,11 @@ class TableDetector:
             Extracted text (empty string if extraction fails or cv2 not available)
         """
         try:
-            import cv2
             import pytesseract
         except ImportError:
-            logger.debug("OpenCV or Tesseract not available, returning empty cell")
+            logger.debug("Tesseract not available, returning empty cell")
             return ""
-        
+
         # Extract cell region
         if len(image.shape) == 3:
             cell_image = image[y_min:y_max, x_min:x_max, :]
@@ -514,22 +507,78 @@ class TableDetector:
     
     def _detect_merged_cells(self, cells: List[TableCell]) -> List[TableCell]:
         """
-        Detect merged cells (colspan/rowspan) based on spatial analysis.
-        
-        Currently a placeholder - merged cell detection would require:
-        - Analyzing text location within cell boundaries
-        - Detecting cells with no content between grid lines
-        - Inferring spanning from spatial gaps
-        
+        Detect merged cells (colspan/rowspan) via empty-slot inference.
+
+        Strategy:
+        1. Build a grid occupancy map from the extracted cells.
+        2. Find every (row, col) slot that has no cell (these are the "holes"
+           left when a neighbouring cell physically spans across them).
+        3. For each hole, walk left to find the nearest filled cell in the
+           same row — that cell gains +1 colspan.  If no left neighbour exists,
+           walk up to find the nearest filled cell in the same column — that
+           cell gains +1 rowspan.
+        4. Repeat until no new holes are found (handles multi-cell spans).
+
         Args:
-            cells: List of extracted cells
-        
+            cells: Cells extracted directly from the grid (all colspan=rowspan=1).
+
         Returns:
-            Cells with colspan/rowspan updated
+            Updated cell list with colspan/rowspan set; empty-slot placeholder
+            cells are removed so the list only contains logical cells.
         """
-        # TODO: Implement merged cell detection
-        # For now, return cells as-is (all colspan=1, rowspan=1)
-        return cells
+        if not cells:
+            return cells
+
+        max_row = max(c.row_index for c in cells)
+        max_col = max(c.col_index for c in cells)
+
+        # Index filled slots
+        cell_map: Dict[Tuple[int, int], TableCell] = {
+            (c.row_index, c.col_index): c for c in cells
+        }
+
+        changed = True
+        while changed:
+            changed = False
+            for row in range(max_row + 1):
+                for col in range(max_col + 1):
+                    if (row, col) in cell_map:
+                        continue  # slot already occupied
+
+                    # Try left neighbour first (colspan extension)
+                    for left_col in range(col - 1, -1, -1):
+                        neighbour = cell_map.get((row, left_col))
+                        if neighbour is not None:
+                            neighbour.colspan += 1
+                            # Mark slot as covered so we don't process it again
+                            cell_map[(row, col)] = neighbour
+                            changed = True
+                            break
+                    else:
+                        # No left neighbour — try cell above (rowspan extension)
+                        for up_row in range(row - 1, -1, -1):
+                            neighbour = cell_map.get((up_row, col))
+                            if neighbour is not None:
+                                neighbour.rowspan += 1
+                                cell_map[(row, col)] = neighbour
+                                changed = True
+                                break
+
+        # Return only the original logical cells (deduplicated by identity)
+        seen_ids = set()
+        result = []
+        for c in cells:
+            cid = id(c)
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                result.append(c)
+
+        logger.debug(
+            "Merged cell detection: %d logical cells from %d grid slots "
+            "(colspan/rowspan updated)",
+            len(result), (max_row + 1) * (max_col + 1),
+        )
+        return result
     
     def detect_tables(
         self,
