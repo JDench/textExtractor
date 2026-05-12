@@ -1,0 +1,11 @@
+# ENVIRONMENT OBJECT -----------------
+venv
+env
+.venv
+.env
+
+# SECRETS -----------------
+.credentials/
+credentials/
+.secrets/
+secrets/
