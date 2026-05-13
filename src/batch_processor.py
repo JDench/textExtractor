@@ -67,7 +67,15 @@ from detectors import (
     IndexDetector, IndexDetectorConfig,
 )
 from detectors.layout_detector import LayoutDetector, LayoutDetectorConfig
+from detectors.column_layout_detector import (
+    ColumnLayoutDetector,
+    ColumnLayoutConfig,
+    ColumnLayoutResult,
+    sort_elements_by_column_order,
+)
 from language_detector import LanguageDetector, LanguageDetectorConfig
+from caption_linker import CaptionLinker, CaptionLinkerConfig
+from cross_page_coordinator import CrossPageCoordinator, CrossPageConfig
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +106,7 @@ class BatchProcessorConfig:
     detect_toc: bool = True
     detect_index: bool = True
     detect_layout: bool = False           # ML-based layout regions (Sprint 9)
+    detect_column_layout: bool = True     # multi-column detection (suppresses ContentTableDetector)
 
     # ── Post-processing ────────────────────────────────────────────────────────
     build_hierarchy: bool = True
@@ -117,8 +126,11 @@ class BatchProcessorConfig:
     reference_config: Optional[ReferenceDetectorConfig] = None
     toc_config: Optional[TOCDetectorConfig] = None
     index_config: Optional[IndexDetectorConfig] = None
-    layout_config: Optional[LayoutDetectorConfig] = None       # Sprint 9
-    language_detector_config: Optional[LanguageDetectorConfig] = None  # Sprint 9
+    layout_config: Optional[LayoutDetectorConfig] = None
+    column_layout_config: Optional[ColumnLayoutConfig] = None
+    language_detector_config: Optional[LanguageDetectorConfig] = None
+    caption_linker_config: Optional[CaptionLinkerConfig] = None
+    cross_page_config: Optional[CrossPageConfig] = None
     hierarchy_config: Optional[HierarchyConfig] = None
     ocr_config: Optional[OCREngineConfig] = None
 
@@ -132,6 +144,10 @@ class BatchProcessorConfig:
     store_raw_ocr_results: bool = False
     # GPU acceleration for image preprocessing (Sprint 9)
     use_gpu: bool = False
+    # Link CAPTION elements to adjacent FIGURE/TABLE elements (Sprint 10)
+    link_captions: bool = True
+    # Merge elements that span page boundaries in process_batch() (Sprint 10)
+    coordinate_cross_page: bool = False
 
 
 class BatchProcessor:
@@ -147,6 +163,9 @@ class BatchProcessor:
         self._ocr_engine: Optional[OCREngine] = None
         self._hierarchy_builder: Optional[HierarchyBuilder] = None
         self._language_detector: Optional[LanguageDetector] = None
+        self._column_layout_detector: Optional[ColumnLayoutDetector] = None
+        self._caption_linker: Optional[CaptionLinker] = None
+        self._cross_page_coordinator: Optional[CrossPageCoordinator] = None
         self._gpu_available: bool = self._check_gpu_availability() if self.config.use_gpu else False
         self._init_detectors()
 
@@ -170,16 +189,20 @@ class BatchProcessor:
         self,
         image_input: Union[str, Path, np.ndarray],
         page_number: int = 1,
-    ) -> DocumentResult:
+        return_dataframe: bool = False,
+    ) -> Any:
         """
         Process a single image and return a DocumentResult.
 
         Args:
-            image_input: File path (str or Path) or BGR NumPy array.
-            page_number: Page number assigned to all extracted elements.
+            image_input:      File path (str or Path) or BGR NumPy array.
+            page_number:      Page number assigned to all extracted elements.
+            return_dataframe: When True, returns ``(DocumentResult, pd.DataFrame)``
+                              instead of just ``DocumentResult``.  Requires pandas.
 
         Returns:
-            DocumentResult with all detected elements and metadata.
+            DocumentResult, or ``(DocumentResult, pd.DataFrame)`` when
+            *return_dataframe* is True.
         """
         t0 = time.perf_counter()
 
@@ -265,26 +288,45 @@ class BatchProcessor:
             errors_encountered=errors,
         )
         raw_ocr = ocr_results if self.config.store_raw_ocr_results else []
-        return DocumentResult(
+        doc = DocumentResult(
             metadata=metadata,
             elements=all_elements,
             raw_ocr_results=raw_ocr,
         )
 
+        # ── Caption linking ───────────────────────────────────────────────────
+        if self.config.link_captions:
+            try:
+                doc, _ = self._get_caption_linker().link(doc)
+            except Exception as exc:
+                errors.append(f"caption_linker: {exc}")
+                logger.warning("CaptionLinker failed: %s", exc)
+
+        if return_dataframe:
+            from exporters import DataFrameExporter
+            df = DataFrameExporter().export_document(doc)
+            return doc, df
+
+        return doc
+
     def process_batch(
         self,
         inputs: List[Union[str, Path, np.ndarray]],
         batch_id: Optional[str] = None,
-    ) -> BatchResult:
+        return_dataframe: bool = False,
+    ) -> Any:
         """
         Process a list of images and return a BatchResult.
 
         Args:
-            inputs:   List of file paths or BGR NumPy arrays.
-            batch_id: Optional identifier for this batch; auto-generated if None.
+            inputs:           List of file paths or BGR NumPy arrays.
+            batch_id:         Optional identifier; auto-generated if None.
+            return_dataframe: When True, returns ``(BatchResult, pd.DataFrame)``
+                              instead of just ``BatchResult``.  Requires pandas.
 
         Returns:
-            BatchResult aggregating all DocumentResult objects plus statistics.
+            BatchResult, or ``(BatchResult, pd.DataFrame)`` when
+            *return_dataframe* is True.
         """
         bid = batch_id or f"batch_{uuid.uuid4().hex[:8]}"
         documents: List[DocumentResult] = []
@@ -299,11 +341,25 @@ class BatchProcessor:
                 doc = self._make_failed_result(label, str(exc), 0.001)
             documents.append(doc)
 
-        return BatchResult(
+        batch = BatchResult(
             batch_id=bid,
             created_at=datetime.now(),
             documents=documents,
         )
+
+        # ── Cross-page coordination ───────────────────────────────────────────
+        if self.config.coordinate_cross_page and len(documents) > 1:
+            try:
+                batch, _ = self._get_cross_page_coordinator().coordinate(batch)
+            except Exception as exc:
+                logger.error("CrossPageCoordinator failed: %s", exc)
+
+        if return_dataframe:
+            from exporters import DataFrameExporter
+            df = DataFrameExporter().to_dataframe(batch)
+            return batch, df
+
+        return batch
 
     # ── Detector initialisation ────────────────────────────────────────────────
 
@@ -339,6 +395,8 @@ class BatchProcessor:
         self._layout_detector = (
             LayoutDetector(cfg.layout_config) if cfg.detect_layout else None
         )
+        if cfg.detect_column_layout:
+            self._column_layout_detector = ColumnLayoutDetector(cfg.column_layout_config)
 
     # ── Lazy singletons ────────────────────────────────────────────────────────
 
@@ -357,6 +415,21 @@ class BatchProcessor:
             self._language_detector = LanguageDetector(self.config.language_detector_config)
         return self._language_detector
 
+    def _get_caption_linker(self) -> CaptionLinker:
+        if self._caption_linker is None:
+            self._caption_linker = CaptionLinker(self.config.caption_linker_config)
+        return self._caption_linker
+
+    def _get_cross_page_coordinator(self) -> CrossPageCoordinator:
+        if self._cross_page_coordinator is None:
+            self._cross_page_coordinator = CrossPageCoordinator(self.config.cross_page_config)
+        return self._cross_page_coordinator
+
+    def _get_column_layout_detector(self) -> ColumnLayoutDetector:
+        if self._column_layout_detector is None:
+            self._column_layout_detector = ColumnLayoutDetector(self.config.column_layout_config)
+        return self._column_layout_detector
+
     # ── Detector dispatch ──────────────────────────────────────────────────────
 
     def _run_all_detectors(
@@ -369,6 +442,29 @@ class BatchProcessor:
     ) -> Tuple[List[StructuralElement], List[str]]:
         """Call each enabled detector and collect elements."""
         all_elements: List[StructuralElement] = []
+        image_h, image_w = image.shape[:2]
+
+        # ── Column layout detection (runs first, gates ContentTableDetector) ──
+        column_layout: Optional[ColumnLayoutResult] = None
+        if self._column_layout_detector is not None and ocr_results:
+            try:
+                column_layout = self._get_column_layout_detector().detect(
+                    ocr_results, float(image_w), float(image_h)
+                )
+                if column_layout.is_multi_column:
+                    logger.info(
+                        "Column layout detected on page %d: %d columns (conf=%.2f) — "
+                        "ContentTableDetector suppressed",
+                        page_number, column_layout.num_columns, column_layout.confidence,
+                    )
+            except Exception as exc:
+                errors.append(f"column_layout: {exc}")
+                logger.warning("ColumnLayoutDetector failed: %s", exc)
+
+        # ContentTableDetector is suppressed when multi-column layout is confirmed
+        suppress_content_table = (
+            column_layout is not None and column_layout.is_multi_column
+        )
 
         # TextDetector has its own internal OCR; different method signature
         self._call(
@@ -391,12 +487,13 @@ class BatchProcessor:
             all_elements, errors,
         )
 
-        # ContentTableDetector requires ocr_results
-        self._call(
-            "table_content", self._content_table_detector,
-            lambda d: d.detect_tables(image, page_number, ocr_results, image_path),
-            all_elements, errors,
-        )
+        # ContentTableDetector requires ocr_results — skip when multi-column confirmed
+        if not suppress_content_table:
+            self._call(
+                "table_content", self._content_table_detector,
+                lambda d: d.detect_tables(image, page_number, ocr_results, image_path),
+                all_elements, errors,
+            )
 
         # Sprint 4+ detectors: standard detect(image, ocr_results, page_number)
         for name, detector in [
@@ -417,6 +514,10 @@ class BatchProcessor:
                 lambda d: d.detect(image, ocr_results, page_number),
                 all_elements, errors,
             )
+
+        # ── Apply column reading order when multi-column layout was detected ───
+        if column_layout is not None and column_layout.is_multi_column and all_elements:
+            all_elements = sort_elements_by_column_order(all_elements, column_layout)
 
         return all_elements, errors
 

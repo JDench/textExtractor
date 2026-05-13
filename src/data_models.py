@@ -1220,6 +1220,15 @@ class DocumentResult:
         """Get all elements on a specific page."""
         return [e for e in self.elements if e.page_number == page_num]
     
+    def to_dataframe(self) -> Any:
+        """
+        Convert this document's elements to a pandas DataFrame.
+
+        Requires pandas.  Raises ImportError if not installed.
+        """
+        from exporters import DataFrameExporter  # deferred to avoid circular import
+        return DataFrameExporter().export_document(self)
+
     def to_json(self, hierarchical: bool = False) -> str:
         """Export to JSON, optionally preserving hierarchy."""
         elements_data = [e.to_dict() for e in self.elements]
@@ -1426,6 +1435,16 @@ class BatchResult:
             batch_config=self.batch_config,
         )
     
+    def to_dataframe(self) -> Any:
+        """
+        Convert all elements to a pandas DataFrame (one row per element).
+
+        Requires pandas.  Each row has the same columns as CSVExporter output.
+        Raises ImportError if pandas is not installed.
+        """
+        from exporters import DataFrameExporter  # deferred to avoid circular import
+        return DataFrameExporter().to_dataframe(self)
+
     def filter_by_confidence(self, min_confidence: float) -> "BatchResult":
         """Create new batch with only high-confidence elements."""
         filtered_docs = []

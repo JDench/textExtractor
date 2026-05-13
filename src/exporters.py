@@ -416,6 +416,95 @@ try:
 except ImportError:
     _OPENPYXL_AVAILABLE = False
 
+try:
+    import pandas as _pd  # noqa: F401
+    _PANDAS_AVAILABLE = True
+except ImportError:
+    _PANDAS_AVAILABLE = False
+
+
+# ── DataFrame Exporter ─────────────────────────────────────────────────────────
+
+class DataFrameExporter:
+    """
+    Converts BatchResult / DocumentResult to a pandas DataFrame.
+
+    Each row corresponds to one StructuralElement.  Columns match those
+    produced by CSVExporter (common fields + optional type-specific detail).
+
+    Optionally serialises the DataFrame to a pickle (.pkl) file so the result
+    can be reloaded in a subsequent session without re-running OCR.
+
+    Requires pandas.  Raises ImportError at construction time if not installed.
+
+    Usage::
+
+        exporter = DataFrameExporter()
+
+        # In-memory DataFrame
+        df = exporter.to_dataframe(batch)
+
+        # Save to pickle and get the DataFrame back
+        df = exporter.export(batch, "results/batch.pkl")
+
+        # Single-document convenience
+        df = exporter.export_document(doc, "results/page1.pkl")
+    """
+
+    def __init__(self, config: Optional[ExporterConfig] = None) -> None:
+        if not _PANDAS_AVAILABLE:
+            raise ImportError(
+                "pandas is required for DataFrameExporter. "
+                "Install it with: pip install pandas"
+            )
+        self.config = config or ExporterConfig()
+
+    def to_dataframe(self, batch: BatchResult) -> "Any":  # -> pd.DataFrame
+        """Return a pandas DataFrame with one row per element in *batch*."""
+        import pandas as pd
+        rows = _all_elem_rows(batch, self.config.include_type_columns)
+        if not rows:
+            return pd.DataFrame()
+        return pd.DataFrame(rows)
+
+    def export(
+        self,
+        batch: BatchResult,
+        path: Union[str, Path],
+    ) -> "Any":  # -> pd.DataFrame
+        """
+        Convert *batch* to a DataFrame and save it as a pickle file at *path*.
+
+        Returns the DataFrame so callers can use it immediately without
+        loading the file.
+        """
+        import pandas as pd
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        df = self.to_dataframe(batch)
+        df.to_pickle(path)
+        logger.info("DataFrameExporter: wrote %d rows to %s", len(df), path)
+        return df
+
+    def export_document(
+        self,
+        doc: DocumentResult,
+        path: Optional[Union[str, Path]] = None,
+    ) -> "Any":  # -> pd.DataFrame
+        """
+        Convenience wrapper: convert a single DocumentResult to a DataFrame.
+
+        If *path* is given, also saves to that pickle file.
+        """
+        dummy = BatchResult(
+            batch_id=doc.metadata.document_id,
+            created_at=doc.metadata.processing_timestamp,
+            documents=[doc],
+        )
+        if path is not None:
+            return self.export(dummy, path)
+        return self.to_dataframe(dummy)
+
 
 class ExcelExporter:
     """
