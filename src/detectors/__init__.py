@@ -22,6 +22,13 @@ Sprint 4
 - formula_detector      : FORMULA, EQUATION (+ optional pix2tex/sympy layers)
 - figure_detector       : FIGURE, CAPTION (contour-based + caption-pattern linking)
 - annotation_detector   : ANNOTATION (highlight/underline/strikethrough)
+
+Sprint 5
+--------
+- watermark_detector    : WATERMARK (vocabulary + span + pixel-opacity signals)
+- barcode_detector      : BARCODE (pyzbar primary, cv2.QRCodeDetector fallback)
+- code_block_detector   : CODE_BLOCK (visual gray-box + structural alignment)
+- reference_detector    : REFERENCE citation/footnote/bibliography + cross-linking
 """
 
 from .text_detector import TextDetector, TextDetectorConfig, TextDetectionTrace
@@ -52,6 +59,26 @@ from .annotation_detector import (
     AnnotationDetector,
     AnnotationDetectorConfig,
     AnnotationDetectionTrace,
+)
+from .watermark_detector import (
+    WatermarkDetector,
+    WatermarkDetectorConfig,
+    WatermarkDetectionTrace,
+)
+from .barcode_detector import (
+    BarcodeDetector,
+    BarcodeDetectorConfig,
+    BarcodeDetectionTrace,
+)
+from .code_block_detector import (
+    CodeBlockDetector,
+    CodeBlockDetectorConfig,
+    CodeBlockDetectionTrace,
+)
+from .reference_detector import (
+    ReferenceDetector,
+    ReferenceDetectorConfig,
+    ReferenceDetectionTrace,
 )
 
 __all__ = [
@@ -84,4 +111,17 @@ __all__ = [
     "AnnotationDetector",
     "AnnotationDetectorConfig",
     "AnnotationDetectionTrace",
+    # Sprint 5
+    "WatermarkDetector",
+    "WatermarkDetectorConfig",
+    "WatermarkDetectionTrace",
+    "BarcodeDetector",
+    "BarcodeDetectorConfig",
+    "BarcodeDetectionTrace",
+    "CodeBlockDetector",
+    "CodeBlockDetectorConfig",
+    "CodeBlockDetectionTrace",
+    "ReferenceDetector",
+    "ReferenceDetectorConfig",
+    "ReferenceDetectionTrace",
 ]
