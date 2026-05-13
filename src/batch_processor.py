@@ -66,6 +66,8 @@ from detectors import (
     TOCDetector, TOCDetectorConfig,
     IndexDetector, IndexDetectorConfig,
 )
+from detectors.layout_detector import LayoutDetector, LayoutDetectorConfig
+from language_detector import LanguageDetector, LanguageDetectorConfig
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +97,7 @@ class BatchProcessorConfig:
     detect_references: bool = True
     detect_toc: bool = True
     detect_index: bool = True
+    detect_layout: bool = False           # ML-based layout regions (Sprint 9)
 
     # ── Post-processing ────────────────────────────────────────────────────────
     build_hierarchy: bool = True
@@ -114,15 +117,21 @@ class BatchProcessorConfig:
     reference_config: Optional[ReferenceDetectorConfig] = None
     toc_config: Optional[TOCDetectorConfig] = None
     index_config: Optional[IndexDetectorConfig] = None
+    layout_config: Optional[LayoutDetectorConfig] = None       # Sprint 9
+    language_detector_config: Optional[LanguageDetectorConfig] = None  # Sprint 9
     hierarchy_config: Optional[HierarchyConfig] = None
     ocr_config: Optional[OCREngineConfig] = None
 
     # ── Global settings ────────────────────────────────────────────────────────
     language: str = "eng"
+    # Auto-detect document language from OCR results (Sprint 9)
+    auto_detect_language: bool = False
     # Global post-filter: elements with confidence < this are dropped
     min_confidence: float = 0.30
     # When True, raw OCRTextResult objects are stored in DocumentResult
     store_raw_ocr_results: bool = False
+    # GPU acceleration for image preprocessing (Sprint 9)
+    use_gpu: bool = False
 
 
 class BatchProcessor:
@@ -137,14 +146,16 @@ class BatchProcessor:
         self.config = config or BatchProcessorConfig()
         self._ocr_engine: Optional[OCREngine] = None
         self._hierarchy_builder: Optional[HierarchyBuilder] = None
+        self._language_detector: Optional[LanguageDetector] = None
+        self._gpu_available: bool = self._check_gpu_availability() if self.config.use_gpu else False
         self._init_detectors()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def warmup(self) -> None:
         """
-        Pre-initialise the OCR engine and HierarchyBuilder so the first
-        call to process_image() does not pay the startup cost.
+        Pre-initialise the OCR engine, HierarchyBuilder, and LanguageDetector
+        so the first call to process_image() does not pay the startup cost.
 
         Call this once after constructing a BatchProcessor that will be
         reused across many images (e.g. in a long-running service).
@@ -152,6 +163,8 @@ class BatchProcessor:
         self._get_ocr_engine()
         if self.config.build_hierarchy:
             self._get_hierarchy_builder()
+        if self.config.auto_detect_language:
+            self._get_language_detector()
 
     def process_image(
         self,
@@ -184,6 +197,10 @@ class BatchProcessor:
         image_h, image_w = image.shape[:2]
         errors: List[str] = []
 
+        # ── GPU preprocessing (when enabled and available) ────────────────────
+        if self.config.use_gpu and self._gpu_available:
+            image = self._preprocess_image_gpu(image)
+
         # ── Shared OCR pass ───────────────────────────────────────────────────
         ocr_results: List[OCRTextResult] = []
         try:
@@ -193,6 +210,15 @@ class BatchProcessor:
         except Exception as exc:
             errors.append(f"OCR: {exc}")
             logger.error("OCR failed for %s: %s", image_path, exc)
+
+        # ── Language detection ────────────────────────────────────────────────
+        detected_language = self.config.language
+        if self.config.auto_detect_language and ocr_results:
+            try:
+                detected_language, _ = self._get_language_detector().detect(ocr_results)
+            except Exception as exc:
+                errors.append(f"language_detector: {exc}")
+                logger.warning("Language detection failed: %s", exc)
 
         # ── Run all enabled detectors ─────────────────────────────────────────
         all_elements: List[StructuralElement] = []
@@ -232,7 +258,7 @@ class BatchProcessor:
             processing_timestamp=datetime.now(),
             processing_duration=duration,
             image_dimensions=(image_w, image_h),
-            detected_language=self.config.language,
+            detected_language=detected_language,
             total_elements_extracted=len(all_elements),
             average_confidence=avg_conf,
             processing_status=status,
@@ -310,6 +336,9 @@ class BatchProcessor:
         )
         self._toc_detector = TOCDetector(cfg.toc_config) if cfg.detect_toc else None
         self._index_detector = IndexDetector(cfg.index_config) if cfg.detect_index else None
+        self._layout_detector = (
+            LayoutDetector(cfg.layout_config) if cfg.detect_layout else None
+        )
 
     # ── Lazy singletons ────────────────────────────────────────────────────────
 
@@ -322,6 +351,11 @@ class BatchProcessor:
         if self._hierarchy_builder is None:
             self._hierarchy_builder = HierarchyBuilder(self.config.hierarchy_config)
         return self._hierarchy_builder
+
+    def _get_language_detector(self) -> LanguageDetector:
+        if self._language_detector is None:
+            self._language_detector = LanguageDetector(self.config.language_detector_config)
+        return self._language_detector
 
     # ── Detector dispatch ──────────────────────────────────────────────────────
 
@@ -376,6 +410,7 @@ class BatchProcessor:
             ("reference",      self._reference_detector),
             ("toc",            self._toc_detector),
             ("index",          self._index_detector),
+            ("layout",         self._layout_detector),   # Sprint 9
         ]:
             self._call(
                 name, detector,
@@ -405,6 +440,34 @@ class BatchProcessor:
         except Exception as exc:
             errors.append(f"{name}: {exc}")
             logger.error("Detector '%s' failed: %s", name, exc)
+
+    # ── GPU helpers ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _check_gpu_availability() -> bool:
+        """Return True if an OpenCV CUDA-capable GPU is present."""
+        try:
+            return cv2.cuda.getCudaEnabledDeviceCount() > 0
+        except AttributeError:
+            return False
+
+    @staticmethod
+    def _preprocess_image_gpu(image: np.ndarray) -> np.ndarray:
+        """
+        Apply GPU-accelerated grayscale conversion and denoising.
+        Falls back to CPU automatically if CUDA operations fail.
+        """
+        try:
+            gpu_mat = cv2.cuda_GpuMat()
+            gpu_mat.upload(image)
+            # Grayscale conversion on GPU
+            gpu_gray = cv2.cuda.cvtColor(gpu_mat, cv2.COLOR_BGR2GRAY)
+            # Upload back to BGR (detectors expect 3-channel or handle gray)
+            gpu_bgr = cv2.cuda.cvtColor(gpu_gray, cv2.COLOR_GRAY2BGR)
+            return gpu_bgr.download()
+        except Exception as exc:
+            logger.debug("GPU preprocessing unavailable, using CPU fallback: %s", exc)
+            return image
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 

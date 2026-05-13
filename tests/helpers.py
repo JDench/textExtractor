@@ -106,16 +106,20 @@ def make_heading(
 
 
 def make_doc(
-    elements: List[StructuralElement],
-    doc_id: str = "doc_1",
+    elements: Optional[List[StructuralElement]] = None,
+    doc_id: Optional[str] = None,
+    document_id: Optional[str] = None,
     source_file: str = "test.png",
 ) -> DocumentResult:
+    if elements is None:
+        elements = []
+    resolved_id = document_id or doc_id or "doc_1"
     avg_conf = (
         sum(e.confidence for e in elements) / len(elements) if elements else 0.0
     )
     meta = DocumentMetadata(
         source_file=source_file,
-        document_id=doc_id,
+        document_id=resolved_id,
         processing_timestamp=datetime.now(),
         processing_duration=0.5,
         image_dimensions=(800, 600),
@@ -130,11 +134,14 @@ def make_doc(
 def make_batch(
     elements_per_doc: Optional[List[List[StructuralElement]]] = None,
     batch_id: str = "test_batch",
+    documents: Optional[List[DocumentResult]] = None,
 ) -> BatchResult:
+    if documents is not None:
+        return BatchResult(batch_id=batch_id, created_at=datetime.now(), documents=documents)
     if elements_per_doc is None:
         elements_per_doc = [[]]
     docs = [
-        make_doc(elems, f"doc_{i}", f"test_{i}.png")
+        make_doc(elems, doc_id=f"doc_{i}", source_file=f"test_{i}.png")
         for i, elems in enumerate(elements_per_doc)
     ]
     return BatchResult(batch_id=batch_id, created_at=datetime.now(), documents=docs)

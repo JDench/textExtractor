@@ -297,3 +297,126 @@ class TestHierarchyBuilding:
         bp.process_image(_blank_image())
         # Hierarchy builder should still be None (never initialised)
         assert bp._hierarchy_builder is None
+
+
+# ── Sprint 9: language detection ──────────────────────────────────────────────
+
+class TestLanguageDetection:
+    def _bp_with_mock_ocr(self, ocr_text="hello world this is a test sentence"):
+        from data_models import BoundingBox, OCRTextResult
+        bp = BatchProcessor(BatchProcessorConfig(
+            build_hierarchy=False,
+            auto_detect_language=True,
+        ))
+        ocr_result = OCRTextResult(
+            text=ocr_text,
+            confidence=0.9,
+            bbox=BoundingBox(0, 0, 100, 20),
+            language="eng",
+        )
+        mock_ocr = MagicMock()
+        mock_ocr.extract_text.return_value = ([ocr_result], MagicMock())
+        bp._ocr_engine = mock_ocr
+        empty = ([], MagicMock())
+        for attr in [
+            "_text_detector", "_list_detector", "_table_detector",
+            "_content_table_detector", "_header_footer_detector",
+            "_formula_detector", "_figure_detector", "_annotation_detector",
+            "_watermark_detector", "_barcode_detector", "_code_block_detector",
+            "_reference_detector", "_toc_detector", "_index_detector",
+            "_layout_detector",
+        ]:
+            mock_det = MagicMock()
+            mock_det.detect.return_value = empty
+            mock_det.detect_text_elements.return_value = empty
+            mock_det.detect_lists.return_value = empty
+            mock_det.detect_tables.return_value = empty
+            setattr(bp, attr, mock_det)
+        return bp
+
+    def test_auto_detect_language_true_sets_metadata(self):
+        bp = self._bp_with_mock_ocr()
+        result = bp.process_image(_blank_image())
+        assert result.metadata.detected_language != ""
+
+    def test_auto_detect_language_false_uses_config_language(self):
+        bp = BatchProcessor(BatchProcessorConfig(
+            build_hierarchy=False,
+            auto_detect_language=False,
+            language="fra",
+        ))
+        mock_ocr = MagicMock()
+        mock_ocr.extract_text.return_value = ([], MagicMock())
+        bp._ocr_engine = mock_ocr
+        empty = ([], MagicMock())
+        for attr in [
+            "_text_detector", "_list_detector", "_table_detector",
+            "_content_table_detector", "_header_footer_detector",
+            "_formula_detector", "_figure_detector", "_annotation_detector",
+            "_watermark_detector", "_barcode_detector", "_code_block_detector",
+            "_reference_detector", "_toc_detector", "_index_detector",
+            "_layout_detector",
+        ]:
+            mock_det = MagicMock()
+            mock_det.detect.return_value = empty
+            mock_det.detect_text_elements.return_value = empty
+            mock_det.detect_lists.return_value = empty
+            mock_det.detect_tables.return_value = empty
+            setattr(bp, attr, mock_det)
+        result = bp.process_image(_blank_image())
+        assert result.metadata.detected_language == "fra"
+
+    def test_language_detector_lazy_init(self):
+        bp = BatchProcessor(BatchProcessorConfig(
+            build_hierarchy=False,
+            auto_detect_language=True,
+        ))
+        # Before first call, _language_detector is None
+        assert bp._language_detector is None
+
+    def test_get_language_detector_singleton(self):
+        bp = BatchProcessor(BatchProcessorConfig(auto_detect_language=True))
+        ld1 = bp._get_language_detector()
+        ld2 = bp._get_language_detector()
+        assert ld1 is ld2
+
+
+# ── Sprint 9: GPU acceleration ────────────────────────────────────────────────
+
+class TestGPUAcceleration:
+    def test_gpu_false_does_not_set_gpu_available(self):
+        bp = BatchProcessor(BatchProcessorConfig(use_gpu=False))
+        assert bp._gpu_available is False
+
+    def test_check_gpu_availability_returns_bool(self):
+        result = BatchProcessor._check_gpu_availability()
+        assert isinstance(result, bool)
+
+    def test_preprocess_image_gpu_falls_back_to_cpu(self):
+        # On machines without CUDA, should return a valid numpy array unchanged
+        img = _blank_image()
+        result = BatchProcessor._preprocess_image_gpu(img)
+        assert isinstance(result, np.ndarray)
+        assert result.shape == img.shape
+
+
+# ── Sprint 9: layout detector integration ─────────────────────────────────────
+
+class TestLayoutDetectorIntegration:
+    def test_detect_layout_false_skips_layout_detector(self):
+        bp = BatchProcessor(BatchProcessorConfig(detect_layout=False))
+        assert bp._layout_detector is None
+
+    def test_detect_layout_true_creates_layout_detector(self):
+        from detectors.layout_detector import LayoutDetector
+        bp = BatchProcessor(BatchProcessorConfig(detect_layout=True))
+        assert isinstance(bp._layout_detector, LayoutDetector)
+
+    def test_warmup_initialises_language_detector(self):
+        bp = BatchProcessor(BatchProcessorConfig(
+            build_hierarchy=False,
+            auto_detect_language=True,
+        ))
+        assert bp._language_detector is None
+        bp.warmup()
+        assert bp._language_detector is not None
