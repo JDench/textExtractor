@@ -29,6 +29,12 @@ Sprint 5
 - barcode_detector      : BARCODE (pyzbar primary, cv2.QRCodeDetector fallback)
 - code_block_detector   : CODE_BLOCK (visual gray-box + structural alignment)
 - reference_detector    : REFERENCE citation/footnote/bibliography + cross-linking
+
+Sprint 6
+--------
+- toc_detector          : TABLE_OF_CONTENTS (heading scan + entry pattern matching)
+- index_detector        : INDEX (index heading scan + entry/sub-entry parsing)
+See also src/hierarchy_builder.py — HierarchyBuilder post-processor
 """
 
 from .text_detector import TextDetector, TextDetectorConfig, TextDetectionTrace
@@ -80,6 +86,16 @@ from .reference_detector import (
     ReferenceDetectorConfig,
     ReferenceDetectionTrace,
 )
+from .toc_detector import (
+    TOCDetector,
+    TOCDetectorConfig,
+    TOCDetectionTrace,
+)
+from .index_detector import (
+    IndexDetector,
+    IndexDetectorConfig,
+    IndexDetectionTrace,
+)
 
 __all__ = [
     # Sprint 2
@@ -124,4 +140,11 @@ __all__ = [
     "ReferenceDetector",
     "ReferenceDetectorConfig",
     "ReferenceDetectionTrace",
+    # Sprint 6
+    "TOCDetector",
+    "TOCDetectorConfig",
+    "TOCDetectionTrace",
+    "IndexDetector",
+    "IndexDetectorConfig",
+    "IndexDetectionTrace",
 ]
