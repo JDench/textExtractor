@@ -64,7 +64,7 @@ _NUMERIC_CITE_RE = re.compile(
 )
 
 _AUTHOR_YEAR_RE = re.compile(
-    r"\(([A-Z][a-zA-Z\-']+(?:\s+(?:and|&|et\s+al\.?)\s+[A-Z][a-zA-Z\-']+)?)"
+    r"\(([A-Z][a-zA-Z\-']+(?:\s+(?:and|&)\s+[A-Z][a-zA-Z\-']+|\s+et\s+al\.?)?)"
     r",?\s+(\d{4}[a-z]?)\)"
 )
 

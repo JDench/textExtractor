@@ -9,3 +9,7 @@ env
 credentials/
 .secrets/
 secrets/
+
+# CACHE -----------------
+**/__pycache__/*
+**/*.pyc

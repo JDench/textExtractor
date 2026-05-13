@@ -221,16 +221,16 @@ class ListDetector:
             config: ListDetectorConfig. Uses defaults if None.
         """
         self.config = config or ListDetectorConfig()
-        
-        # Initialize OCR engine for line-by-line detection
+
+        # OCR engine config (engine itself created lazily on first use)
         self.ocr_config = OCREngineConfig(
             psm_modes=[PSMMode.SINGLE_LINE, PSMMode.SINGLE_BLOCK],
             languages=self.config.language,
             enable_preprocessing=self.config.enable_preprocessing,
             min_confidence=self.config.min_item_confidence,
         )
-        self.ocr_engine = OCREngine(self.ocr_config)
-        
+        self._ocr_engine: Optional[OCREngine] = None
+
         # Compile regex patterns for marker detection
         self._compile_marker_patterns()
     
@@ -247,7 +247,12 @@ class ListDetector:
         
         # Roman numeral pattern: i., I., (i), (I), i), I)
         self.roman_pattern = re.compile(r"^[\s]*(([ivxlcdm]+|[IVXLCDM]+)[.):-])\s+(.+)")
-    
+
+    def _get_ocr_engine(self) -> OCREngine:
+        if self._ocr_engine is None:
+            self._ocr_engine = OCREngine(self.ocr_config)
+        return self._ocr_engine
+
     def _detect_marker(self, line: str) -> Tuple[Optional[ListMarkerType], Optional[str], str]:
         """
         Detect marker type in a line of text.
@@ -374,7 +379,7 @@ class ListDetector:
         
         # Get or extract OCR results
         if ocr_results is None:
-            ocr_results = self.ocr_engine.extract_text(image, page_number=page_number)
+            ocr_results = self._get_ocr_engine().extract_text(image, page_number=page_number)
         
         # If no OCR results, return early
         if not ocr_results:

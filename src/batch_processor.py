@@ -141,6 +141,18 @@ class BatchProcessor:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
+    def warmup(self) -> None:
+        """
+        Pre-initialise the OCR engine and HierarchyBuilder so the first
+        call to process_image() does not pay the startup cost.
+
+        Call this once after constructing a BatchProcessor that will be
+        reused across many images (e.g. in a long-running service).
+        """
+        self._get_ocr_engine()
+        if self.config.build_hierarchy:
+            self._get_hierarchy_builder()
+
     def process_image(
         self,
         image_input: Union[str, Path, np.ndarray],

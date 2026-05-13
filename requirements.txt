@@ -3,6 +3,12 @@ opencv-python>=4.8.0
 pytesseract>=0.3.10
 Pillow>=10.0.0
 
+# Testing
+pytest>=7.4.0
+
+# Optional — Excel export (Sprint 7)
+openpyxl>=3.1.0
+
 # Optional — formula detection (Sprint 4 Task 2)
 # pix2tex[cli]>=0.1.2   # image → LaTeX OCR; install with: pip install pix2tex[cli]
 # sympy>=1.12           # LaTeX validation & variable extraction; pip install sympy
